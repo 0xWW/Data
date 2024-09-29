@@ -1,1 +1,234 @@
 
+To implement the **Entity Resolution using the Llama 3 model**, you can follow these steps. I'll provide detailed guidance and code for leveraging Llama 3 in Python for your project. Since we’re using a local version of the **Llama 3 model**, this involves setting up a model environment, fine-tuning the model on your data, and using it for entity resolution.
+
+### 1. **Setting Up Llama 3 for Local Use**
+
+First, you'll need to install the necessary libraries for Llama 3. **Llama 3** is an open-source LLM provided by Meta and can be run locally with Hugging Face’s `transformers` library.
+
+#### a. **Installation Steps:**
+To run **Llama 3** locally, you need the `transformers` library. Run the following command to install it:
+
+```bash
+pip install transformers accelerate sentencepiece
+```
+
+#### b. **Downloading Llama 3 Model:**
+You can download the Llama 3 model from Hugging Face. Since Llama models can be large, make sure you have sufficient storage and memory.
+
+```python
+from transformers import LlamaForCausalLM, LlamaTokenizer
+
+# Load the Llama 3 model and tokenizer
+model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-3b")
+tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-3b")
+```
+
+### 2. **Preprocessing Data for Entity Resolution**
+
+You already have your entity data in PostgreSQL and relationships in Neptune. Let's focus on how to preprocess this data for feeding into the Llama model.
+
+#### a. **Python Code to Fetch and Preprocess Data:**
+
+Here’s how you can pull your data and prepare it for Llama:
+
+```python
+import pandas as pd
+import psycopg2
+
+# Connect to PostgreSQL and fetch entity data
+conn = psycopg2.connect(
+    host="your_postgres_host",
+    database="your_database_name",
+    user="your_username",
+    password="your_password"
+)
+
+# Load data from PostgreSQL tables
+legal_entity_df = pd.read_sql_query("SELECT * FROM legal_entity", conn)
+address_df = pd.read_sql_query("SELECT * FROM address", conn)
+phone_df = pd.read_sql_query("SELECT * FROM phone", conn)
+email_df = pd.read_sql_query("SELECT * FROM email", conn)
+
+# Close connection after fetching the data
+conn.close()
+
+# Preprocess: Combining data to a single dataset for feeding into the model
+entity_data = legal_entity_df.merge(address_df, on="entity_id", how="left")
+entity_data = entity_data.merge(phone_df, on="entity_id", how="left")
+entity_data = entity_data.merge(email_df, on="entity_id", how="left")
+
+print(entity_data.head())
+```
+
+### 3. **Preparing Input Prompts for Llama 3**
+
+Next, you need to create prompts for the Llama 3 model to help resolve whether two entities are duplicates. We’ll use natural language as the input to Llama.
+
+#### b. **Python Code for Creating Prompts:**
+
+```python
+def create_entity_prompt(row1, row2):
+    # Create a prompt that compares two entities
+    prompt = f"""
+    We have two entities, and we need to decide if they are duplicates or different entities.
+
+    Entity 1:
+    Name: {row1['name']}
+    Address: {row1['address']}
+    Phone: {row1['phone']}
+    Email: {row1['email']}
+
+    Entity 2:
+    Name: {row2['name']}
+    Address: {row2['address']}
+    Phone: {row2['phone']}
+    Email: {row2['email']}
+
+    Please analyze these entities and suggest whether they are the same or different, and explain why.
+    """
+    return prompt
+
+# Example usage:
+row1 = entity_data.iloc[0]  # Replace with actual data row
+row2 = entity_data.iloc[1]  # Replace with actual data row
+
+prompt = create_entity_prompt(row1, row2)
+print(prompt)
+```
+
+### 4. **Feeding Data to Llama 3 for Entity Resolution**
+
+Once the prompts are ready, we can pass them to the Llama model for processing and generate entity resolution results.
+
+#### a. **Python Code to Use Llama 3 for Entity Resolution:**
+
+```python
+from transformers import LlamaForCausalLM, LlamaTokenizer
+
+# Load the Llama 3 model and tokenizer
+model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-3b")
+tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-3b")
+
+def resolve_entities_with_llama(prompt):
+    # Tokenize the input prompt
+    inputs = tokenizer(prompt, return_tensors="pt")
+
+    # Generate model output
+    output = model.generate(**inputs, max_length=300)
+
+    # Decode and return the model's response
+    return tokenizer.decode(output[0], skip_special_tokens=True)
+
+# Example usage:
+result = resolve_entities_with_llama(prompt)
+print("Llama 3 Resolution Result:", result)
+```
+
+### 5. **Running Entity Resolution in Batch Mode**
+
+You will likely need to compare many entity pairs. Here’s how you can loop through your dataset and apply Llama 3 to all entity pairs.
+
+```python
+# Compare each entity in the dataset with another entity
+for i in range(len(entity_data)):
+    for j in range(i+1, len(entity_data)):
+        row1 = entity_data.iloc[i]
+        row2 = entity_data.iloc[j]
+
+        # Create prompt for the entity pair
+        prompt = create_entity_prompt(row1, row2)
+        
+        # Get Llama's resolution
+        result = resolve_entities_with_llama(prompt)
+        print(f"Comparison between {row1['name']} and {row2['name']}:\n", result)
+```
+
+### 6. **Building a Simple UI for Entity Resolution Review**
+
+For a review system where human users can check and approve/reject the resolutions, you can build a simple **Flask** and **React** application.
+
+#### a. **Flask Backend for Serving Resolved Entities:**
+
+```python
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+# API to serve resolved entities for review
+@app.route('/resolve_entities', methods=['GET'])
+def resolve_entities():
+    row1 = entity_data.iloc[0]
+    row2 = entity_data.iloc[1]
+
+    prompt = create_entity_prompt(row1, row2)
+    result = resolve_entities_with_llama(prompt)
+    
+    # Send the result to the frontend
+    return jsonify({
+        'entity1': row1.to_dict(),
+        'entity2': row2.to_dict(),
+        'resolution': result
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+#### b. **React Frontend for Displaying Entity Comparison:**
+
+```jsx
+import React, { useEffect, useState } from 'react';
+
+function EntityResolution() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch('/resolve_entities')
+      .then(response => response.json())
+      .then(data => setData(data));
+  }, []);
+
+  if (!data) return <div>Loading...</div>;
+
+  return (
+    <div>
+      <h1>Entity Resolution</h1>
+      <div>
+        <h3>Entity 1</h3>
+        <p>Name: {data.entity1.name}</p>
+        <p>Address: {data.entity1.address}</p>
+        <p>Phone: {data.entity1.phone}</p>
+        <p>Email: {data.entity1.email}</p>
+      </div>
+      <div>
+        <h3>Entity 2</h3>
+        <p>Name: {data.entity2.name}</p>
+        <p>Address: {data.entity2.address}</p>
+        <p>Phone: {data.entity2.phone}</p>
+        <p>Email: {data.entity2.email}</p>
+      </div>
+      <div>
+        <h4>Resolution Suggestion</h4>
+        <p>{data.resolution}</p>
+      </div>
+      <button>Approve</button>
+      <button>Reject</button>
+    </div>
+  );
+}
+
+export default EntityResolution;
+```
+
+### 7. **Continuously Improving with User Feedback**
+
+Over time, you can fine-tune Llama 3 on the data and results from the human-approved resolutions. By training the model further, it will improve its accuracy in identifying duplicates and unique entities based on past decisions.
+
+### Summary:
+1. **Ingest Data**: Fetch entity data from PostgreSQL and relationship data from Neptune.
+2. **Preprocess Data**: Combine entity data and prepare prompts for Llama 3.
+3. **Use Llama 3**: Create prompts for entity pairs, feed them to Llama 3, and get resolution suggestions.
+4. **Build UI**: Use Flask and React for an interactive UI to review and approve Llama's suggestions.
+5. **Improve**: Continuously refine Llama 3 using user feedback and past entity resolution data.
+
+This solution leverages the powerful natural language understanding of Llama 3 to provide more contextually aware entity resolution and integrates a UI for manual review and verification.
